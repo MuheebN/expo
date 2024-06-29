@@ -8,113 +8,101 @@ import SDWebImageWebPCoder
 
 public class ImageManipulatorModule: Module {
   typealias LoadImageCallback = (Result<UIImage, Error>) -> Void
-  typealias SaveImageResult = (url: URL, data: Data)
 
   public func definition() -> ModuleDefinition {
     Name("ExpoImageManipulator")
 
-    AsyncFunction("manipulateAsync", manipulateImage)
-  }
+    // Legacy API, first deprecated in SDK 52
+    AsyncFunction("manipulateAsync") { (url: URL, actions: [ManipulateAction], options: ManipulateOptions) in
+      guard let appContext else {
+        throw Exceptions.AppContextLost()
+      }
+      let manipulator = ImageManipulator(appContext: appContext, url: url)
 
-  internal func manipulateImage(url: URL, actions: [ManipulateAction], options: ManipulateOptions, promise: Promise) {
-    loadImage(atUrl: url) { result in
-      switch result {
-      case .failure(let error):
-        promise.reject(error)
-      case .success(let image):
-        DispatchQueue.main.async {
-          do {
-            let newImage = try manipulate(image: image, actions: actions)
-            let saveResult = try self.saveImage(newImage, options: options)
-
-            promise.resolve([
-              "uri": saveResult.url.absoluteString,
-              "width": newImage.cgImage?.width ?? 0,
-              "height": newImage.cgImage?.height ?? 0,
-              "base64": options.base64 ? saveResult.data.base64EncodedString() : nil
-            ])
-          } catch {
-            promise.reject(error)
-          }
+      for action in actions {
+        if let resize = action.resize {
+          manipulator.addTransformer(ImageResizeTransformer(options: resize))
+        } else if let rotate = action.rotate {
+          manipulator.addTransformer(ImageRotateTransformer(rotate: rotate))
+        } else if let flip = action.flip {
+          manipulator.addTransformer(ImageFlipTransformer(flip: flip))
+        } else if let crop = action.crop {
+          manipulator.addTransformer(ImageCropTransformer(options: crop))
         }
       }
-    }
-  }
 
-  /**
-   Loads the image from given URL.
-   */
-  internal func loadImage(atUrl url: URL, callback: @escaping LoadImageCallback) {
-    if url.scheme == "data" {
-      guard let data = try? Data(contentsOf: url), let image = UIImage(data: data) else {
-        return callback(.failure(CorruptedImageDataException()))
+      let newImage = try await manipulator.generate()
+      let saveResult = try saveImage(newImage, options: options, appContext: appContext)
+
+      return [
+        "uri": saveResult.url.absoluteString,
+        "width": newImage.cgImage?.width ?? 0,
+        "height": newImage.cgImage?.height ?? 0,
+        "base64": options.base64 ? saveResult.data.base64EncodedString() : nil
+      ]
+    }
+
+    Function("load") { (url: URL) in
+      return ImageManipulator(appContext: appContext!, url: url)
+    }
+
+    Function("manipulate") { (image: ImageRef) in
+      return ImageManipulator(originalImage: image.pointer)
+    }
+
+    Class(ImageManipulator.self) {
+      Function("resize") { (manipulator, options: ResizeOptions) in
+        manipulator.addTransformer(ImageResizeTransformer(options: options))
+        return manipulator
       }
-      return callback(.success(image))
-    }
-    if url.scheme == "ph" || url.scheme == "assets-library" {
-      return loadImageFromPhotoLibrary(url: url, callback: callback)
-    }
 
-    guard let imageLoader = self.appContext?.imageLoader else {
-      return callback(.failure(ImageLoaderNotFoundException()))
-    }
-    guard FileSystemUtilities.permissions(appContext, for: url).contains(.read) else {
-      return callback(.failure(FileSystemReadPermissionException(url.absoluteString)))
-    }
-
-    imageLoader.loadImage(for: url) { error, image in
-      guard let image = image, error == nil else {
-        return callback(.failure(ImageLoadingFailedException(error.debugDescription)))
+      Function("rotate") { (manipulator, rotate: Double) in
+        manipulator.addTransformer(ImageRotateTransformer(rotate: rotate))
+        return manipulator
       }
-      callback(.success(image))
-    }
-  }
 
-  /**
-   Loads the image from user's photo library.
-   */
-  internal func loadImageFromPhotoLibrary(url: URL, callback: @escaping LoadImageCallback) {
-    guard let asset = retrieveAsset(from: url) else {
-      return callback(.failure(ImageNotFoundException()))
-    }
-    let size = CGSize(width: asset.pixelWidth, height: asset.pixelHeight)
-    let options = PHImageRequestOptions()
-
-    options.resizeMode = .exact
-    options.isNetworkAccessAllowed = true
-    options.isSynchronous = true
-    options.deliveryMode = .highQualityFormat
-
-    PHImageManager.default().requestImage(for: asset, targetSize: size, contentMode: .aspectFit, options: options) { image, _ in
-      guard let image = image else {
-        return callback(.failure(ImageNotFoundException()))
+      Function("flip") { (manipulator, flipType: FlipType) in
+        manipulator.addTransformer(ImageFlipTransformer(flip: flipType))
+        return manipulator
       }
-      return callback(.success(image))
-    }
-  }
 
-  /**
-   Saves the image as a file.
-   */
-  internal func saveImage(_ image: UIImage, options: ManipulateOptions) throws -> SaveImageResult {
-    guard let cachesDirectory = self.appContext?.config.cacheDirectory else {
-      throw FileSystemNotFoundException()
+      Function("crop") { (manipulator, rect: CropRect) in
+        manipulator.addTransformer(ImageCropTransformer(options: rect))
+        return manipulator
+      }
+
+      AsyncFunction("generateAsync") { (manipulator) -> ImageRef in
+        let image = try await manipulator.generate()
+        return ImageRef(image)
+      }
     }
 
-    let directory = URL(fileURLWithPath: cachesDirectory.path).appendingPathComponent("ImageManipulator")
-    let filename = UUID().uuidString.appending(options.format.fileExtension)
-    let fileUrl = directory.appendingPathComponent(filename)
+    Class("Image", ImageRef.self) {
+      Property("width") { (image: ImageRef) -> Int in
+        return image.pointer.cgImage?.width ?? 0
+      }
 
-    FileSystemUtilities.ensureDirExists(at: directory)
+      Property("height") { (image: ImageRef) -> Int in
+        return image.pointer.cgImage?.height ?? 0
+      }
 
-    guard let data = imageData(from: image, format: options.format, compression: options.compress) else {
-      throw CorruptedImageDataException()
+      AsyncFunction("saveAsync") { (image: ImageRef, options: ManipulateOptions) in
+        guard let appContext else {
+          throw Exceptions.AppContextLost()
+        }
+        let result = try saveImage(image.pointer, options: options, appContext: appContext)
+
+        // We're returning a dict instead of a path directly because in the future we'll replace it
+        // with a shared ref to the file once this feature gets implemented in expo-file-system.
+        // This should be fully backwards-compatible switch.
+        return [
+          "path": result.url.absoluteString,
+          "uri": result.url.absoluteString,
+          "width": image.pointer.cgImage?.width ?? 0,
+          "height": image.pointer.cgImage?.height ?? 0,
+          "base64": options.base64 ? result.data.base64EncodedString() : nil
+        ]
+      }
     }
-    do {
-      try data.write(to: fileUrl, options: .atomic)
-    } catch let error {
-      throw ImageWriteFailedException(error.localizedDescription)
-    }
-    return (url: fileUrl, data: data)
   }
 }

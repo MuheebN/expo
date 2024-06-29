@@ -1,3 +1,4 @@
+import ExpoImageManipulator from './ExpoImageManipulator';
 import { Action, ImageResult, SaveOptions } from './ImageManipulator.types';
 /**
  * Manipulate the image provided via `uri`. Available modifications are rotating, flipping (mirroring),
@@ -11,4 +12,5 @@ import { Action, ImageResult, SaveOptions } from './ImageManipulator.types';
  * @return Promise which fulfils with [`ImageResult`](#imageresult) object.
  */
 export declare function manipulateAsync(uri: string, actions?: Action[], saveOptions?: SaveOptions): Promise<ImageResult>;
+export default ExpoImageManipulator;
 //# sourceMappingURL=ImageManipulator.d.ts.map
