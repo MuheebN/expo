@@ -6,7 +6,7 @@ export default function App() {
   return (
     <View style={{ backgroundColor: '#00fff' }}>
       <Text style={{ fontSize: 24 }}>
-        My name is <Text style={{ fontWeight: 'bold' }}>MuheebN</Text>
+        My name is <Text style={{ fontWeight: 'bold' }}>Muheeb Nuaku</Text>
       </Text>
     </View>
   );
