@@ -3,9 +3,10 @@ import { StyleSheet, Text, View } from 'react-native';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
+    <View style={{ backgroundColor: '#00fff' }}>
+      <Text style={{ fontSize: 24 }}>
+        My name is <Text style={{ fontWeight: 'bold' }}>Nuaku Muheeb</Text>
+      </Text>
     </View>
   );
 }
@@ -13,7 +14,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#00fff',
     alignItems: 'center',
     justifyContent: 'center',
   },
